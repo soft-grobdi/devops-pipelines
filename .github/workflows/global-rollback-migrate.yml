@@ -76,7 +76,9 @@ jobs:
             CMD="php artisan migrate:rollback --step=${{ inputs.steps }} --force"
           fi
           echo "Comando: $CMD"
+          # shellcheck disable=SC2086 -- el comando intencionalmente se divide en argumentos
           railway run \
             --service "${{ inputs.railway-service }}" \
             --environment "${{ inputs.environment }}" \
             -- $CMD
+
