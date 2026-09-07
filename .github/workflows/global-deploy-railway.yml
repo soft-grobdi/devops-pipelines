@@ -44,14 +44,13 @@ jobs:
         env:
           RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
         run: |
-          # Mismo comentario que en global-migrate.yml: confirmar los flags
-          # vigentes de la CLI al implementar. `railway up` construye y
-          # despliega desde este checkout. Si más adelante conviene desplegar
-          # exactamente la imagen que ya construyó y escaneó
-          # global-docker-build.yml/global-security-scan.yml en vez de
-          # reconstruir aquí, revisar el mecanismo de Railway para desplegar
-          # desde una imagen de registro en vez de build-from-source.
+          # No se pasa --environment: mismo motivo que en global-migrate.yml
+          # -- el Project Token ya viene scoped a un ambiente. `railway up`
+          # construye y despliega desde este checkout. Si más adelante
+          # conviene desplegar exactamente la imagen que ya construyó y
+          # escaneó global-docker-build.yml/global-security-scan.yml en vez
+          # de reconstruir aquí, revisar el mecanismo de Railway para
+          # desplegar desde una imagen de registro en vez de build-from-source.
           railway up \
             --service "${{ inputs.railway-service }}" \
-            --environment "${{ inputs.environment }}" \
             --detach

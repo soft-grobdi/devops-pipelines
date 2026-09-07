@@ -76,10 +76,11 @@ jobs:
             CMD="php artisan migrate:rollback --step=${{ inputs.steps }} --force"
           fi
           echo "Comando: $CMD"
+          # No se pasa --environment: mismo motivo que en global-migrate.yml
+          # -- el Project Token ya viene scoped a un ambiente.
           # El comando intencionalmente se divide en argumentos
           # shellcheck disable=SC2086
           railway run \
             --service "${{ inputs.railway-service }}" \
-            --environment "${{ inputs.environment }}" \
             -- $CMD
 

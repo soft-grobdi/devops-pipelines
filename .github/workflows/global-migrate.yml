@@ -52,12 +52,13 @@ jobs:
         env:
           RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
         run: |
-          # El flag exacto para apuntar servicio/ambiente puede variar entre
-          # versiones de la CLI de Railway (`railway --help` para confirmar
-          # la sintaxis vigente al momento de dar de alta este workflow).
-          # La intención es clara: correr `migrate-command` DENTRO del
-          # servicio/ambiente indicado, sin tocar el código desplegado.
+          # No se pasa --environment: un Project Token de Railway ya viene
+          # scoped a un ambiente específico (por eso hay un RAILWAY_TOKEN
+          # distinto por GitHub Environment). Pasarlo redundante contra un
+          # token ya scoped no está documentado -- se prefiere confiar en
+          # el scope del token antes que arriesgar un flag sin confirmar
+          # contra un ambiente real. --service sí es necesario si el
+          # proyecto de Railway tiene más de un servicio.
           railway run \
             --service "${{ inputs.railway-service }}" \
-            --environment "${{ inputs.environment }}" \
             -- ${{ inputs.migrate-command }}
