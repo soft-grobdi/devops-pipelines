@@ -1,0 +1,25 @@
+name: CI
+
+# Valida los propios workflows de este repo antes de mergear un cambio.
+# No construye ni despliega nada — es la barrera antes de que un YAML roto
+# llegue a un tag que otros repos consumen.
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/**"
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/**"
+
+jobs:
+  actionlint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: actionlint
+        uses: raven-actions/actionlint@v2
+        with:
+          fail-on-error: true

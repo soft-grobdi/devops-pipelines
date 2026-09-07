@@ -92,7 +92,7 @@ jobs:
       - run: php artisan migrate:rollback --force
 
   build:
-    uses: soft-grobdi/devops-pipelines/.github/workflows/global-docker-build.yml@main
+    uses: soft-grobdi/devops-pipelines/.github/workflows/global-docker-build.yml@v1
     with:
       image-name: pedidos-grobdi
     permissions:
@@ -101,7 +101,7 @@ jobs:
 
   scan:
     needs: build
-    uses: soft-grobdi/devops-pipelines/.github/workflows/global-security-scan.yml@main
+    uses: soft-grobdi/devops-pipelines/.github/workflows/global-security-scan.yml@v1
     with:
       image-ref: ${{ needs.build.outputs.image-ref }}
     permissions:
@@ -110,7 +110,7 @@ jobs:
 
   smoketest:
     needs: build
-    uses: soft-grobdi/devops-pipelines/.github/workflows/global-container-smoketest.yml@main
+    uses: soft-grobdi/devops-pipelines/.github/workflows/global-container-smoketest.yml@v1
     with:
       health-path: /up
       port: 8080
@@ -126,7 +126,7 @@ on:
 
 jobs:
   migrate:
-    uses: soft-grobdi/devops-pipelines/.github/workflows/global-migrate.yml@main
+    uses: soft-grobdi/devops-pipelines/.github/workflows/global-migrate.yml@v1
     with:
       railway-service: pedidos-grobdi
       environment: development
@@ -134,7 +134,7 @@ jobs:
 
   deploy:
     needs: migrate
-    uses: soft-grobdi/devops-pipelines/.github/workflows/global-deploy-railway.yml@main
+    uses: soft-grobdi/devops-pipelines/.github/workflows/global-deploy-railway.yml@v1
     with:
       railway-service: pedidos-grobdi
       environment: development
@@ -151,7 +151,7 @@ on:
 
 jobs:
   migrate:
-    uses: soft-grobdi/devops-pipelines/.github/workflows/global-migrate.yml@main
+    uses: soft-grobdi/devops-pipelines/.github/workflows/global-migrate.yml@v1
     with:
       railway-service: pedidos-grobdi
       environment: production
@@ -159,7 +159,7 @@ jobs:
 
   deploy:
     needs: migrate
-    uses: soft-grobdi/devops-pipelines/.github/workflows/global-deploy-railway.yml@main
+    uses: soft-grobdi/devops-pipelines/.github/workflows/global-deploy-railway.yml@v1
     with:
       railway-service: pedidos-grobdi
       environment: production
@@ -182,7 +182,7 @@ on:
 
 jobs:
   rollback:
-    uses: soft-grobdi/devops-pipelines/.github/workflows/global-rollback-migrate.yml@main
+    uses: soft-grobdi/devops-pipelines/.github/workflows/global-rollback-migrate.yml@v1
     with:
       railway-service: pedidos-grobdi
       environment: ${{ inputs.environment }}
@@ -204,7 +204,44 @@ jobs:
 
 ## Versionado
 
-Los ejemplos usan `@main`. Cuando haya más de un repo consumidor conviene
-empezar a taguear releases (`@v1`, `@v1.1.0`) para no romper un pipeline en
-producción por un cambio en `devops-pipelines` que todavía no se probó en
-el repo que lo consume.
+Los ejemplos fijan **`@v1`**, no `@main`. La diferencia importa: si los
+repos consumidores apuntaran a `@main`, cualquier push a `main` en este
+repo afectaría de inmediato al siguiente run de CI/CD de todos ellos —
+`pedidos-grobdi` incluido, con producción real de por medio. Fijando un
+tag, un cambio aquí no le llega a nadie hasta que ese alguien decide,
+a propósito, mover su pin a un tag nuevo.
+
+**Tags flotantes de major** (`v1`, `v2`, ...): se mueven a propósito con
+cada release menor/parche dentro de esa major, así los consumidores que
+fijan `@v1` reciben mejoras y fixes sin tener que actualizar su pin cada
+vez — el mismo patrón que usan `actions/checkout@v4` o cualquier Action
+oficial de GitHub. Un cambio incompatible (que rompe los `inputs` de un
+workflow existente, por ejemplo) se publica como `v2`, nunca moviendo `v1`.
+
+```bash
+# cortar/mover el tag flotante v1 al commit actual, después de mergear a main
+git tag -f v1
+git push origin v1 --force
+
+# tag de versión exacta, no se mueve nunca (opcional, para tener historial)
+git tag v1.0.0
+git push origin v1.0.0
+```
+
+### Probar un cambio en `devops-pipelines` sin afectar a nadie más
+
+1. Trabajar el cambio en una rama de este repo (`develop`, o una rama de
+   feature — no importa el nombre, no es un ambiente desplegable).
+2. Desde **un solo** repo consumidor, apuntar temporalmente ese workflow a
+   la rama de prueba: `uses: soft-grobdi/devops-pipelines/.github/workflows/global-docker-build.yml@develop`
+   (o al SHA exacto del commit, para no depender de que la rama no vuelva a moverse).
+3. Correr ese PR/pipeline de prueba y confirmar que funciona end-to-end.
+4. Recién ahí: mergear a `main` en `devops-pipelines`, mover el tag `v1`
+   (o cortar `v2` si el cambio rompe compatibilidad), y en el repo
+   consumidor devolver la referencia a `@v1` — nunca dejarla apuntando a
+   una rama.
+
+Ningún otro repo se entera del cambio hasta el paso 4. `main` y las ramas
+de trabajo de este repo pueden moverse libremente sin que eso implique un
+despliegue en ningún lado — acá no hay ambientes propios, solo definiciones
+de workflow.
