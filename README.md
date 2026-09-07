@@ -117,54 +117,55 @@ jobs:
 ```
 
 ```yaml
-# .github/workflows/cd-development.yml
-name: CD · development
+# .github/workflows/cd.yml
+name: CD
+
+# Un solo workflow para los dos ambientes: development y production son el
+# mismo flujo (migrar → desplegar), solo cambia a qué ambiente apuntan. El
+# ambiente se resuelve a partir de la rama que disparó el push.
+#
+# Rama de git -> ambiente de Railway:
+#   develop -> development
+#   master  -> production
 
 on:
   push:
-    branches: [develop]
+    branches: [develop, master]
 
 jobs:
+  resolve-environment:
+    runs-on: ubuntu-latest
+    outputs:
+      environment: ${{ steps.map.outputs.environment }}
+    steps:
+      - id: map
+        run: |
+          if [ "${{ github.ref_name }}" = "master" ]; then
+            echo "environment=production" >> "$GITHUB_OUTPUT"
+          else
+            echo "environment=development" >> "$GITHUB_OUTPUT"
+          fi
+
   migrate:
+    needs: resolve-environment
     uses: soft-grobdi/devops-pipelines/.github/workflows/global-migrate.yml@v1
     with:
       railway-service: pedidos-grobdi
-      environment: development
+      environment: ${{ needs.resolve-environment.outputs.environment }}
     secrets: inherit
 
   deploy:
-    needs: migrate
+    needs: [resolve-environment, migrate]
     uses: soft-grobdi/devops-pipelines/.github/workflows/global-deploy-railway.yml@v1
     with:
       railway-service: pedidos-grobdi
-      environment: development
+      environment: ${{ needs.resolve-environment.outputs.environment }}
     secrets: inherit
 ```
 
-```yaml
-# .github/workflows/cd-production.yml
-name: CD · production
-
-on:
-  push:
-    branches: [master]
-
-jobs:
-  migrate:
-    uses: soft-grobdi/devops-pipelines/.github/workflows/global-migrate.yml@v1
-    with:
-      railway-service: pedidos-grobdi
-      environment: production
-    secrets: inherit
-
-  deploy:
-    needs: migrate
-    uses: soft-grobdi/devops-pipelines/.github/workflows/global-deploy-railway.yml@v1
-    with:
-      railway-service: pedidos-grobdi
-      environment: production
-    secrets: inherit
-```
+Si `development` y `production` alguna vez necesitan pasos distintos (no solo
+distinto ambiente), ese es el momento de separarlos en dos archivos — hasta
+ahora no hizo falta.
 
 ```yaml
 # .github/workflows/rollback-migrate.yml
