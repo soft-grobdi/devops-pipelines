@@ -2,10 +2,11 @@ name: Global · Deploy to Railway
 
 # Despliega el repo que llama al ambiente indicado usando la Railway CLI.
 # El job declara `environment: <inputs.environment>` para heredar las
-# reglas de protección (required reviewers) y el secreto RAILWAY_TOKEN del
-# GitHub Environment con ese nombre en el repo que llama — ahí es donde
-# vive el gate de aprobación manual (distinto grupo para development y
-# para production). El repo que llama debe pasar `secrets: inherit`.
+# reglas de protección (required reviewers) del GitHub Environment con ese
+# nombre en el repo que llama — ahí vive el gate de aprobación manual
+# (distinto grupo para development y para production). El token de Railway
+# se recibe como secret explícito (`railway-token`), no por
+# `secrets: inherit` — ver la nota en global-migrate.yml sobre por qué.
 #
 # Uso desde otro repo (normalmente después de global-migrate.yml):
 #
@@ -16,7 +17,8 @@ name: Global · Deploy to Railway
 #       with:
 #         railway-service: pedidos-grobdi
 #         environment: development
-#       secrets: inherit
+#       secrets:
+#         railway-token: ${{ secrets.RAILWAY_TOKEN_DEVELOPMENT }}
 
 on:
   workflow_call:
@@ -29,6 +31,10 @@ on:
         description: "Nombre del GitHub Environment / ambiente de Railway (ej. development, production)"
         required: true
         type: string
+    secrets:
+      railway-token:
+        description: "Project Token de Railway para el ambiente indicado"
+        required: true
 
 jobs:
   deploy:
@@ -42,7 +48,7 @@ jobs:
 
       - name: Desplegar
         env:
-          RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+          RAILWAY_TOKEN: ${{ secrets.railway-token }}
         run: |
           # No se pasa --environment: mismo motivo que en global-migrate.yml
           # -- el Project Token ya viene scoped a un ambiente. `railway up`

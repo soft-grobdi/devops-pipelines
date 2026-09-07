@@ -5,9 +5,14 @@ name: Global · Run Migrations
 # si la migración falla, el deploy nunca llega a intentarse.
 #
 # El job declara `environment: <inputs.environment>` para heredar las
-# reglas de protección (required reviewers) y el secreto RAILWAY_TOKEN del
-# GitHub Environment con ese nombre en el repo que llama. El repo que llama
-# debe pasar `secrets: inherit` para que ese secreto llegue hasta aquí.
+# reglas de protección (required reviewers) del GitHub Environment con ese
+# nombre en el repo que llama. El token de Railway se recibe como secret
+# explícito (`railway-token`), NO por `secrets: inherit`: los secrets
+# scoped a un Environment no se propagan por inherit a un job de otro repo
+# que solo declara el environment como input de texto -- hay que pasarlos
+# a mano. Se recomienda un secret de repo por ambiente (ej.
+# RAILWAY_TOKEN_DEVELOPMENT, RAILWAY_TOKEN_PRODUCTION) que el repo que
+# llama selecciona según el ambiente resuelto.
 #
 # migrate-command no asume Laravel — el valor por defecto es artisan, pero
 # un futuro servicio Node puede pasar el suyo (ej. `npx drizzle-kit migrate`).
@@ -21,7 +26,8 @@ name: Global · Run Migrations
 #       with:
 #         railway-service: pedidos-grobdi
 #         environment: development
-#       secrets: inherit
+#       secrets:
+#         railway-token: ${{ secrets.RAILWAY_TOKEN_DEVELOPMENT }}
 
 on:
   workflow_call:
@@ -39,6 +45,10 @@ on:
         required: false
         type: string
         default: "php artisan migrate --force"
+    secrets:
+      railway-token:
+        description: "Project Token de Railway para el ambiente indicado"
+        required: true
 
 jobs:
   migrate:
@@ -50,7 +60,7 @@ jobs:
 
       - name: Ejecutar migraciones
         env:
-          RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+          RAILWAY_TOKEN: ${{ secrets.railway-token }}
         run: |
           # No se pasa --environment: un Project Token de Railway ya viene
           # scoped a un ambiente específico (por eso hay un RAILWAY_TOKEN
