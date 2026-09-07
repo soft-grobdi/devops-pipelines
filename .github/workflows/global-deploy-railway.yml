@@ -57,6 +57,13 @@ jobs:
           # escaneó global-docker-build.yml/global-security-scan.yml en vez
           # de reconstruir aquí, revisar el mecanismo de Railway para
           # desplegar desde una imagen de registro en vez de build-from-source.
+          #
+          # -m/--message: railway up (CLI) no manda metadata de git como sí
+          # hace la integración nativa Railway<->GitHub -- sin esto, todo
+          # deployment aparece en el dashboard solo como "railway up / via
+          # CLI". Con --message se ve el SHA corto y el asunto del commit
+          # que realmente se está desplegando.
           railway up \
             --service "${{ inputs.railway-service }}" \
+            --message "$(git log -1 --pretty=format:'%h %s')" \
             --detach
