@@ -204,8 +204,8 @@ jobs:
 
 ## Versionado
 
-Los ejemplos fijan **`@v1`**, no `@main`. La diferencia importa: si los
-repos consumidores apuntaran a `@main`, cualquier push a `main` en este
+Los ejemplos fijan **`@v1`**, no `@master`. La diferencia importa: si los
+repos consumidores apuntaran a `@master`, cualquier push a `master` en este
 repo afectaría de inmediato al siguiente run de CI/CD de todos ellos —
 `pedidos-grobdi` incluido, con producción real de por medio. Fijando un
 tag, un cambio aquí no le llega a nadie hasta que ese alguien decide,
@@ -219,7 +219,7 @@ oficial de GitHub. Un cambio incompatible (que rompe los `inputs` de un
 workflow existente, por ejemplo) se publica como `v2`, nunca moviendo `v1`.
 
 ```bash
-# cortar/mover el tag flotante v1 al commit actual, después de mergear a main
+# cortar/mover el tag flotante v1 al commit actual, después de mergear a master
 git tag -f v1
 git push origin v1 --force
 
@@ -236,12 +236,12 @@ git push origin v1.0.0
    la rama de prueba: `uses: soft-grobdi/devops-pipelines/.github/workflows/global-docker-build.yml@develop`
    (o al SHA exacto del commit, para no depender de que la rama no vuelva a moverse).
 3. Correr ese PR/pipeline de prueba y confirmar que funciona end-to-end.
-4. Recién ahí: mergear a `main` en `devops-pipelines`, mover el tag `v1`
+4. Recién ahí: mergear a `master` en `devops-pipelines`, mover el tag `v1`
    (o cortar `v2` si el cambio rompe compatibilidad), y en el repo
    consumidor devolver la referencia a `@v1` — nunca dejarla apuntando a
    una rama.
 
-Ningún otro repo se entera del cambio hasta el paso 4. `main` y las ramas
+Ningún otro repo se entera del cambio hasta el paso 4. `master` y las ramas
 de trabajo de este repo pueden moverse libremente sin que eso implique un
 despliegue en ningún lado — acá no hay ambientes propios, solo definiciones
 de workflow.

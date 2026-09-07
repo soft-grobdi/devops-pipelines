@@ -9,7 +9,7 @@ on:
     paths:
       - ".github/workflows/**"
   push:
-    branches: [main]
+    branches: [master]
     paths:
       - ".github/workflows/**"
 
