@@ -10,7 +10,7 @@ name: Global · Security Scan
 #
 #   jobs:
 #     build:
-#       uses: soft-grobdi/devops-pipelines/.github/workflows/global-docker-build.yml@main
+#       uses: soft-grobdi/devops-pipelines/.github/workflows/global-docker-build.yml@v1
 #       with:
 #         image-name: pedidos-grobdi
 #       permissions:
@@ -18,7 +18,7 @@ name: Global · Security Scan
 #         packages: write
 #     scan:
 #       needs: build
-#       uses: soft-grobdi/devops-pipelines/.github/workflows/global-security-scan.yml@main
+#       uses: soft-grobdi/devops-pipelines/.github/workflows/global-security-scan.yml@v1
 #       with:
 #         image-ref: ${{ needs.build.outputs.image-ref }}
 #       permissions:

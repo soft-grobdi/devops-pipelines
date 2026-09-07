@@ -8,7 +8,7 @@ name: Global · Docker Build
 #
 #   jobs:
 #     build:
-#       uses: soft-grobdi/devops-pipelines/.github/workflows/global-docker-build.yml@main
+#       uses: soft-grobdi/devops-pipelines/.github/workflows/global-docker-build.yml@v1
 #       with:
 #         image-name: pedidos-grobdi
 #       permissions:

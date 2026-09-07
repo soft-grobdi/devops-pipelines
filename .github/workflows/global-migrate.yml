@@ -17,7 +17,7 @@ name: Global · Run Migrations
 #   jobs:
 #     migrate:
 #       needs: [ci]  # o el job que agrupe los checks previos
-#       uses: soft-grobdi/devops-pipelines/.github/workflows/global-migrate.yml@main
+#       uses: soft-grobdi/devops-pipelines/.github/workflows/global-migrate.yml@v1
 #       with:
 #         railway-service: pedidos-grobdi
 #         environment: development

@@ -30,7 +30,7 @@ name: Global · Rollback Migrations
 #           default: 1
 #   jobs:
 #     rollback:
-#       uses: soft-grobdi/devops-pipelines/.github/workflows/global-rollback-migrate.yml@main
+#       uses: soft-grobdi/devops-pipelines/.github/workflows/global-rollback-migrate.yml@v1
 #       with:
 #         railway-service: pedidos-grobdi
 #         environment: ${{ inputs.environment }}

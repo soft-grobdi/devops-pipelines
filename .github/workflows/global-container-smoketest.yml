@@ -13,10 +13,17 @@ name: Global · Container Smoke Test
 #
 #   jobs:
 #     smoketest:
-#       uses: soft-grobdi/devops-pipelines/.github/workflows/global-container-smoketest.yml@main
+#       uses: soft-grobdi/devops-pipelines/.github/workflows/global-container-smoketest.yml@v1
 #       with:
 #         health-path: /up
 #         port: 8080
+#         # Si el docker-compose.yml del repo depende de un archivo que no
+#         # está versionado (ej. un env_file con config local), setup-command
+#         # es el lugar para generarlo antes de levantar el stack:
+#         setup-command: |
+#           cat > .env.docker <<'ENVEOF'
+#           APP_KEY=base64:...
+#           ENVEOF
 
 on:
   workflow_call:
@@ -41,12 +48,21 @@ on:
         required: false
         type: number
         default: 120
+      setup-command:
+        description: "Comando de shell opcional a correr antes de `docker compose up` (ej. escribir un archivo de entorno que el compose necesita y que no está versionado)"
+        required: false
+        type: string
+        default: ""
 
 jobs:
   smoketest:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+
+      - name: Preparación previa
+        if: inputs.setup-command != ''
+        run: ${{ inputs.setup-command }}
 
       - name: Levantar stack
         run: docker compose -f "${{ inputs.compose-file }}" up -d --build
