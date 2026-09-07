@@ -1,0 +1,63 @@
+name: Global · Run Migrations
+
+# Corre el comando de migración indicado contra la base real de un ambiente
+# de Railway, SIN desplegar código nuevo. Separado del deploy a propósito:
+# si la migración falla, el deploy nunca llega a intentarse.
+#
+# El job declara `environment: <inputs.environment>` para heredar las
+# reglas de protección (required reviewers) y el secreto RAILWAY_TOKEN del
+# GitHub Environment con ese nombre en el repo que llama. El repo que llama
+# debe pasar `secrets: inherit` para que ese secreto llegue hasta aquí.
+#
+# migrate-command no asume Laravel — el valor por defecto es artisan, pero
+# un futuro servicio Node puede pasar el suyo (ej. `npx drizzle-kit migrate`).
+#
+# Uso desde otro repo:
+#
+#   jobs:
+#     migrate:
+#       needs: [ci]  # o el job que agrupe los checks previos
+#       uses: soft-grobdi/devops-pipelines/.github/workflows/global-migrate.yml@main
+#       with:
+#         railway-service: pedidos-grobdi
+#         environment: development
+#       secrets: inherit
+
+on:
+  workflow_call:
+    inputs:
+      railway-service:
+        description: "Nombre del servicio en Railway"
+        required: true
+        type: string
+      environment:
+        description: "Nombre del GitHub Environment / ambiente de Railway (ej. development, production)"
+        required: true
+        type: string
+      migrate-command:
+        description: "Comando a ejecutar dentro del servicio para aplicar migraciones pendientes"
+        required: false
+        type: string
+        default: "php artisan migrate --force"
+
+jobs:
+  migrate:
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.environment }}
+    steps:
+      - name: Instalar Railway CLI
+        run: npm install -g @railway/cli
+
+      - name: Ejecutar migraciones
+        env:
+          RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+        run: |
+          # El flag exacto para apuntar servicio/ambiente puede variar entre
+          # versiones de la CLI de Railway (`railway --help` para confirmar
+          # la sintaxis vigente al momento de dar de alta este workflow).
+          # La intención es clara: correr `migrate-command` DENTRO del
+          # servicio/ambiente indicado, sin tocar el código desplegado.
+          railway run \
+            --service "${{ inputs.railway-service }}" \
+            --environment "${{ inputs.environment }}" \
+            -- ${{ inputs.migrate-command }}

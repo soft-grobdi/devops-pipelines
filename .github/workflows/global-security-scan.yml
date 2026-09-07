@@ -1,0 +1,70 @@
+name: Global · Security Scan
+
+# Dos escaneos independientes, ninguno específico de un lenguaje:
+#   1. gitleaks sobre el código del repo que llama — secretos filtrados
+#      (tokens, contraseñas, claves) que no deberían estar en el historial.
+#   2. Trivy sobre la imagen ya construida — CVEs conocidas en el sistema
+#      operativo base y en las dependencias empaquetadas.
+#
+# Uso desde otro repo (normalmente encadenado tras global-docker-build.yml):
+#
+#   jobs:
+#     build:
+#       uses: soft-grobdi/devops-pipelines/.github/workflows/global-docker-build.yml@main
+#       with:
+#         image-name: pedidos-grobdi
+#       permissions:
+#         contents: read
+#         packages: write
+#     scan:
+#       needs: build
+#       uses: soft-grobdi/devops-pipelines/.github/workflows/global-security-scan.yml@main
+#       with:
+#         image-ref: ${{ needs.build.outputs.image-ref }}
+#       permissions:
+#         contents: read
+#         packages: read
+
+on:
+  workflow_call:
+    inputs:
+      image-ref:
+        description: "Referencia completa de la imagen a escanear (ej. la salida de global-docker-build)"
+        required: true
+        type: string
+      severity:
+        description: "Severidades que hacen fallar el job, separadas por coma"
+        required: false
+        type: string
+        default: "CRITICAL,HIGH"
+
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    steps:
+      # fetch-depth: 0 porque gitleaks escanea el historial, no solo el
+      # último commit — un secreto filtrado y luego "borrado" en un commit
+      # posterior sigue estando en el historial de git.
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Escanear secretos filtrados en el código
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Log in a GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Escanear vulnerabilidades de la imagen
+        uses: aquasecurity/trivy-action@0.24.0
+        with:
+          image-ref: ${{ inputs.image-ref }}
+          severity: ${{ inputs.severity }}
+          exit-code: "1"
+          ignore-unfixed: true

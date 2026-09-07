@@ -1,0 +1,74 @@
+name: Global · Container Smoke Test
+
+# Levanta el stack del repo que llama con `docker compose` y confirma que un
+# endpoint de salud responde antes de dar el build por bueno. Es la última
+# validación antes de mergear/desplegar: si el contenedor arranca pero la
+# app no sirve tráfico (falta una variable de entorno, un binario, una
+# migración pendiente), esto lo agarra sin necesitar un despliegue real.
+#
+# No asume nada de PHP/Laravel: el docker-compose.yml y el endpoint de
+# salud los define el repo que llama.
+#
+# Uso desde otro repo:
+#
+#   jobs:
+#     smoketest:
+#       uses: soft-grobdi/devops-pipelines/.github/workflows/global-container-smoketest.yml@main
+#       with:
+#         health-path: /up
+#         port: 8080
+
+on:
+  workflow_call:
+    inputs:
+      compose-file:
+        description: "Ruta al docker-compose.yml del repo que llama"
+        required: false
+        type: string
+        default: docker-compose.yml
+      health-path:
+        description: "Path del endpoint de salud (debe responder 2xx sin autenticación)"
+        required: false
+        type: string
+        default: /up
+      port:
+        description: "Puerto publicado en el host por el servicio de la app"
+        required: false
+        type: number
+        default: 8080
+      timeout-seconds:
+        description: "Cuánto esperar a que el endpoint de salud responda antes de fallar"
+        required: false
+        type: number
+        default: 120
+
+jobs:
+  smoketest:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Levantar stack
+        run: docker compose -f "${{ inputs.compose-file }}" up -d --build
+
+      - name: Esperar respuesta saludable
+        run: |
+          deadline=$(( $(date +%s) + ${{ inputs.timeout-seconds }} ))
+          url="http://localhost:${{ inputs.port }}${{ inputs.health-path }}"
+          echo "Esperando ${url}"
+          until curl -sf -o /dev/null "$url"; do
+            if [ "$(date +%s)" -ge "$deadline" ]; then
+              echo "Se agotó el tiempo (${{ inputs.timeout-seconds }}s) esperando ${url}"
+              exit 1
+            fi
+            sleep 3
+          done
+          echo "OK: ${url} respondió"
+
+      - name: Logs del stack (siempre, para diagnóstico)
+        if: always()
+        run: docker compose -f "${{ inputs.compose-file }}" logs
+
+      - name: Apagar stack
+        if: always()
+        run: docker compose -f "${{ inputs.compose-file }}" down -v

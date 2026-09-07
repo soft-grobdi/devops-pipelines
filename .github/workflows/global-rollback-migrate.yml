@@ -1,0 +1,82 @@
+name: Global · Rollback Migrations
+
+# Revierte migraciones ya aplicadas contra la base real de un ambiente.
+# Deliberadamente NUNCA se dispara solo — este workflow es `workflow_call`,
+# así que necesita un wrapper en el repo que llama activado por
+# `workflow_dispatch` (botón "Run workflow" en la pestaña Actions, nunca un
+# push ni una reacción automática a un deploy fallido).
+#
+# Revertir esquema que ya corrió contra datos reales es riesgoso: puede
+# perder datos que la migración transformó o generó. Por eso pasa por la
+# MISMA aprobación que un deploy a ese ambiente (mismo `environment:`) — en
+# production, la aprueba el mismo equipo de release, nunca queda a un clic
+# de distancia de un incidente en caliente. El estándar recomendado es
+# preferir un forward-fix (una migración nueva que corrige el problema)
+# antes que revertir la que ya está aplicada; este workflow existe para el
+# caso en que la migración corrió hace segundos y se confirma que ningún
+# dato real la usó todavía.
+#
+# Uso desde otro repo:
+#
+#   # .github/workflows/rollback-migrate.yml del repo que llama
+#   on:
+#     workflow_dispatch:
+#       inputs:
+#         environment:
+#           type: choice
+#           options: [development, production]
+#         steps:
+#           type: number
+#           default: 1
+#   jobs:
+#     rollback:
+#       uses: soft-grobdi/devops-pipelines/.github/workflows/global-rollback-migrate.yml@main
+#       with:
+#         railway-service: pedidos-grobdi
+#         environment: ${{ inputs.environment }}
+#         steps: ${{ inputs.steps }}
+#       secrets: inherit
+
+on:
+  workflow_call:
+    inputs:
+      railway-service:
+        description: "Nombre del servicio en Railway"
+        required: true
+        type: string
+      environment:
+        description: "Nombre del GitHub Environment / ambiente de Railway (ej. development, production)"
+        required: true
+        type: string
+      steps:
+        description: "Lotes de migración a revertir (solo aplica al comando por defecto de Laravel)"
+        required: false
+        type: number
+        default: 1
+      rollback-command:
+        description: "Comando completo de rollback. Si se omite, usa el de Laravel con --step=<steps>"
+        required: false
+        type: string
+        default: ""
+
+jobs:
+  rollback:
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.environment }}
+    steps:
+      - name: Instalar Railway CLI
+        run: npm install -g @railway/cli
+
+      - name: Revertir migraciones
+        env:
+          RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+        run: |
+          CMD="${{ inputs.rollback-command }}"
+          if [ -z "$CMD" ]; then
+            CMD="php artisan migrate:rollback --step=${{ inputs.steps }} --force"
+          fi
+          echo "Comando: $CMD"
+          railway run \
+            --service "${{ inputs.railway-service }}" \
+            --environment "${{ inputs.environment }}" \
+            -- $CMD

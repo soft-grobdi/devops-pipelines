@@ -1,0 +1,57 @@
+name: Global · Deploy to Railway
+
+# Despliega el repo que llama al ambiente indicado usando la Railway CLI.
+# El job declara `environment: <inputs.environment>` para heredar las
+# reglas de protección (required reviewers) y el secreto RAILWAY_TOKEN del
+# GitHub Environment con ese nombre en el repo que llama — ahí es donde
+# vive el gate de aprobación manual (distinto grupo para development y
+# para production). El repo que llama debe pasar `secrets: inherit`.
+#
+# Uso desde otro repo (normalmente después de global-migrate.yml):
+#
+#   jobs:
+#     deploy:
+#       needs: migrate
+#       uses: soft-grobdi/devops-pipelines/.github/workflows/global-deploy-railway.yml@main
+#       with:
+#         railway-service: pedidos-grobdi
+#         environment: development
+#       secrets: inherit
+
+on:
+  workflow_call:
+    inputs:
+      railway-service:
+        description: "Nombre del servicio en Railway"
+        required: true
+        type: string
+      environment:
+        description: "Nombre del GitHub Environment / ambiente de Railway (ej. development, production)"
+        required: true
+        type: string
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.environment }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Instalar Railway CLI
+        run: npm install -g @railway/cli
+
+      - name: Desplegar
+        env:
+          RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+        run: |
+          # Mismo comentario que en global-migrate.yml: confirmar los flags
+          # vigentes de la CLI al implementar. `railway up` construye y
+          # despliega desde este checkout. Si más adelante conviene desplegar
+          # exactamente la imagen que ya construyó y escaneó
+          # global-docker-build.yml/global-security-scan.yml en vez de
+          # reconstruir aquí, revisar el mecanismo de Railway para desplegar
+          # desde una imagen de registro en vez de build-from-source.
+          railway up \
+            --service "${{ inputs.railway-service }}" \
+            --environment "${{ inputs.environment }}" \
+            --detach
