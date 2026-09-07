@@ -17,6 +17,13 @@ name: Global · Run Migrations
 # migrate-command no asume Laravel — el valor por defecto es artisan, pero
 # un futuro servicio Node puede pasar el suyo (ej. `npx drizzle-kit migrate`).
 #
+# `railway run` NO ejecuta el comando dentro del contenedor ya desplegado:
+# lo corre en ESTE runner, solo inyectándole las variables de entorno del
+# ambiente de Railway. Por eso el job hace checkout del código y, si hace
+# falta, instala el toolchain (php-version) y las dependencias
+# (setup-command) antes de correr migrate-command -- sin esto, `artisan`
+# (o el equivalente del stack que sea) no existe en el runner.
+#
 # Uso desde otro repo:
 #
 #   jobs:
@@ -26,6 +33,8 @@ name: Global · Run Migrations
 #       with:
 #         railway-service: pedidos-grobdi
 #         environment: development
+#         php-version: "8.2"
+#         setup-command: composer install --prefer-dist --no-progress --no-interaction
 #       secrets:
 #         railway-token: ${{ secrets.RAILWAY_TOKEN_DEVELOPMENT }}
 
@@ -45,6 +54,17 @@ on:
         required: false
         type: string
         default: "php artisan migrate --force"
+      php-version:
+        description: "Versión de PHP a instalar en el runner antes de migrar (vacío = no instalar PHP, ej. para un stack Node)"
+        required: false
+        type: string
+        default: ""
+      setup-command:
+        description: "Comando para instalar dependencias antes de migrar (ej. composer install, npm ci)"
+        required: false
+        type: string
+        default: ""
+
     secrets:
       railway-token:
         description: "Project Token de Railway para el ambiente indicado"
@@ -55,6 +75,18 @@ jobs:
     runs-on: ubuntu-latest
     environment: ${{ inputs.environment }}
     steps:
+      - uses: actions/checkout@v4
+
+      - if: inputs.php-version != ''
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: ${{ inputs.php-version }}
+          coverage: none
+
+      - if: inputs.setup-command != ''
+        name: Instalar dependencias
+        run: ${{ inputs.setup-command }}
+
       - name: Instalar Railway CLI
         run: npm install -g @railway/cli
 
