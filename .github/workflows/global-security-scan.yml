@@ -62,7 +62,13 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Escanear vulnerabilidades de la imagen
-        uses: aquasecurity/trivy-action@0.24.0
+        # Fijado por SHA, no por tag: en 2026 aquasecurity/trivy-action
+        # sufrió un compromiso de cadena de suministro real -- 76 de sus 77
+        # tags fueron repuntados con un stealer de credenciales que corría
+        # silenciosamente antes del scanner legítimo. Un tag es mutable por
+        # diseño (es justo el mecanismo que este repo usa para @v1); un SHA
+        # no. Esta línea es la 0.35.0 confirmada limpia tras el incidente.
+        uses: aquasecurity/trivy-action@57a97c7e7821a5776cebc9bb87c984fa69cba8f1 # v0.35.0
         with:
           image-ref: ${{ inputs.image-ref }}
           severity: ${{ inputs.severity }}
