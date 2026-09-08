@@ -54,15 +54,29 @@ on:
         type: string
         default: ""
 
+permissions:
+  contents: read
+
 jobs:
   smoketest:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
 
       - name: Preparación previa
         if: inputs.setup-command != ''
-        run: ${{ inputs.setup-command }}
+        # setup-command va por `env:` y se ejecuta con `eval`, no
+        # interpolado directo en `run:` -- ${{ }} se sustituye como texto
+        # plano ANTES de que bash vea el script, así que un valor con
+        # comillas/`;` mal pensadas podría romper la estructura del script
+        # que lo rodea (no solo correr como comando, sino inyectar
+        # sentencias fuera de contexto). Ningún consumidor de hoy pasa algo
+        # así, pero es una librería reutilizable -- no debe depender de que
+        # seguirá siendo cierto.
+        env:
+          SETUP_COMMAND: ${{ inputs.setup-command }}
+        run: eval "$SETUP_COMMAND"
 
       - name: Levantar stack
         run: docker compose -f "${{ inputs.compose-file }}" up -d --build

@@ -36,9 +36,13 @@ on:
         description: "Project Token de Railway para el ambiente indicado"
         required: true
 
+permissions:
+  contents: read
+
 jobs:
   deploy:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     environment: ${{ inputs.environment }}
     steps:
       - uses: actions/checkout@v4
@@ -63,7 +67,16 @@ jobs:
           # deployment aparece en el dashboard solo como "railway up / via
           # CLI". Con --message se ve el SHA corto y el asunto del commit
           # que realmente se está desplegando.
+          #
+          # SIN --detach a propósito: con --detach, el comando retorna en
+          # cuanto Railway ACEPTA el build (encolado), no cuando el
+          # despliegue realmente termina -- el job quedaba en verde aunque
+          # el contenedor entrara en crashloop o nunca pasara el healthcheck
+          # (/up, configurado en railway.json). Sin --detach, `railway up`
+          # bloquea hasta el estado terminal del deployment (incluido ese
+          # healthcheck) y su código de salida lo refleja: 0 solo si de
+          # verdad quedó sano, 1 si falló o se cayó. El costo es que el job
+          # tarda lo que tarde el deploy real, en vez de retornar al toque.
           railway up \
             --service "${{ inputs.railway-service }}" \
-            --message "$(git log -1 --pretty=format:'%h %s')" \
-            --detach
+            --message "$(git log -1 --pretty=format:'%h %s')"

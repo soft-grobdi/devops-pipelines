@@ -42,9 +42,14 @@ on:
         description: "Referencia completa de la imagen construida (registro/nombre:tag)"
         value: ${{ jobs.build.outputs.image-ref }}
 
+permissions:
+  contents: read
+  packages: write
+
 jobs:
   build:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     outputs:
       image-ref: ${{ steps.meta.outputs.image-ref }}
     steps:

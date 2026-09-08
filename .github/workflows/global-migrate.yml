@@ -81,29 +81,51 @@ on:
         description: "Contraseña del usuario anterior, inyectada como DB_PASSWORD"
         required: false
 
+permissions:
+  contents: read
+
 jobs:
   migrate:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     environment: ${{ inputs.environment }}
     steps:
       - uses: actions/checkout@v4
 
       - if: inputs.php-version != ''
-        uses: shivammathur/setup-php@v2
+        # Fijado por SHA, no por tag flotante v2 -- misma razón que Trivy
+        # en global-security-scan.yml. 2.37.2 confirmada.
+        uses: shivammathur/setup-php@f3e473d116dcccaddc5834248c87452386958240 # 2.37.2
         with:
           php-version: ${{ inputs.php-version }}
           coverage: none
 
       - if: inputs.setup-command != ''
         name: Instalar dependencias
-        run: ${{ inputs.setup-command }}
+        env:
+          SETUP_COMMAND: ${{ inputs.setup-command }}
+        run: eval "$SETUP_COMMAND"
 
       - name: Instalar Railway CLI
         run: npm install -g @railway/cli
 
       - name: Ejecutar migraciones
+        # migrate-command y las credenciales del usuario de migración van
+        # por `env:`, no interpoladas directo en `run:` -- ${{ }} se
+        # sustituye como texto plano ANTES de que bash vea el script, así
+        # que un valor con comillas/`;` mal pensadas podría romper la
+        # estructura del script que lo rodea (el `if`, el propio
+        # RAILWAY_TOKEN de arriba), no solo correr como comando. Ningún
+        # consumidor de hoy pasa algo así, pero es una librería reutilizable
+        # -- no debe depender de que seguirá siendo cierto. `sh -c "$VAR"`
+        # (comillas dobles) preserva el valor como una única unidad y deja
+        # que sea sh, no bash, quien reinterprete sus propias comillas
+        # internas (ej. el `sh -c '...'` que ya trae migrate-command).
         env:
           RAILWAY_TOKEN: ${{ secrets.railway-token }}
+          MIGRATE_COMMAND: ${{ inputs.migrate-command }}
+          MIGRATOR_USERNAME: ${{ secrets.db-migrator-username }}
+          MIGRATOR_PASSWORD: ${{ secrets.db-migrator-password }}
         run: |
           # No se pasa --environment: un Project Token de Railway ya viene
           # scoped a un ambiente específico (por eso hay un RAILWAY_TOKEN
@@ -112,20 +134,12 @@ jobs:
           # el scope del token antes que arriesgar un flag sin confirmar
           # contra un ambiente real. --service sí es necesario si el
           # proyecto de Railway tiene más de un servicio.
-          #
-          # db-migrator-username/password NO pueden ir embebidos en
-          # migrate-command por el repo que llama: el contexto `secrets` no
-          # es accesible dentro de `with:` (solo dentro de `secrets:`, que
-          # es donde este repo los recibe). Por eso se splicean acá, en
-          # texto plano dentro del script -- igual que DB_HOST/DB_PORT hoy,
-          # `env VAR=valor cmd` exporta la variable al proceso hijo (`sh -c
-          # '...'` de migrate-command y, con él, a `php artisan` adentro).
-          if [ -n "${{ secrets.db-migrator-username }}" ]; then
+          if [ -n "$MIGRATOR_USERNAME" ]; then
             railway run \
               --service "${{ inputs.railway-service }}" \
-              -- env DB_USERNAME="${{ secrets.db-migrator-username }}" DB_PASSWORD="${{ secrets.db-migrator-password }}" ${{ inputs.migrate-command }}
+              -- env DB_USERNAME="$MIGRATOR_USERNAME" DB_PASSWORD="$MIGRATOR_PASSWORD" sh -c "$MIGRATE_COMMAND"
           else
             railway run \
               --service "${{ inputs.railway-service }}" \
-              -- ${{ inputs.migrate-command }}
+              -- sh -c "$MIGRATE_COMMAND"
           fi

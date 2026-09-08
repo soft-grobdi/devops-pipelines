@@ -38,9 +38,14 @@ on:
         type: string
         default: "CRITICAL,HIGH"
 
+permissions:
+  contents: read
+  packages: read
+
 jobs:
   scan:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       # fetch-depth: 0 porque gitleaks escanea el historial, no solo el
       # último commit — un secreto filtrado y luego "borrado" en un commit
@@ -50,7 +55,9 @@ jobs:
           fetch-depth: 0
 
       - name: Escanear secretos filtrados en el código
-        uses: gitleaks/gitleaks-action@v2
+        # Fijado por SHA, no por tag flotante: mismo criterio que Trivy más
+        # abajo -- un tag es mutable por diseño, un SHA no. v2.3.9 confirmada.
+        uses: gitleaks/gitleaks-action@ff98106e4c7b2bc287b24eaf42907196329070c7 # v2.3.9
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 

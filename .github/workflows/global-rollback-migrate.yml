@@ -101,51 +101,59 @@ on:
         description: "Contraseña del usuario anterior, inyectada como DB_PASSWORD"
         required: false
 
+permissions:
+  contents: read
+
 jobs:
   rollback:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     environment: ${{ inputs.environment }}
     steps:
       - uses: actions/checkout@v4
 
       - if: inputs.php-version != ''
-        uses: shivammathur/setup-php@v2
+        # Fijado por SHA, no por tag flotante v2 -- misma razón que Trivy
+        # en global-security-scan.yml. 2.37.2 confirmada.
+        uses: shivammathur/setup-php@f3e473d116dcccaddc5834248c87452386958240 # 2.37.2
         with:
           php-version: ${{ inputs.php-version }}
           coverage: none
 
       - if: inputs.setup-command != ''
         name: Instalar dependencias
-        run: ${{ inputs.setup-command }}
+        env:
+          SETUP_COMMAND: ${{ inputs.setup-command }}
+        run: eval "$SETUP_COMMAND"
 
       - name: Instalar Railway CLI
         run: npm install -g @railway/cli
 
       - name: Revertir migraciones
+        # rollback-command y las credenciales del usuario de migración van
+        # por `env:`, no interpoladas directo en `run:` -- mismo motivo que
+        # en global-migrate.yml: ${{ }} se sustituye como texto plano ANTES
+        # de que bash vea el script, así que un valor mal pensado podría
+        # romper la estructura del script que lo rodea, no solo correr como
+        # comando. `sh -c "$VAR"` (comillas dobles) preserva el valor como
+        # una única unidad; el `sh -c '...'` que ya trae rollback-command
+        # se reinterpreta correctamente adentro, en un parseo nuevo.
         env:
           RAILWAY_TOKEN: ${{ secrets.railway-token }}
+          ROLLBACK_COMMAND: ${{ inputs.rollback-command != '' && inputs.rollback-command || format('php artisan migrate:rollback --step={0} --force', inputs.steps) }}
+          MIGRATOR_USERNAME: ${{ secrets.db-migrator-username }}
+          MIGRATOR_PASSWORD: ${{ secrets.db-migrator-password }}
         run: |
           # No se pasa --environment: mismo motivo que en global-migrate.yml
           # -- el Project Token ya viene scoped a un ambiente. --service sí
           # es necesario si el proyecto de Railway tiene más de un servicio.
-          #
-          # El comando por defecto se resuelve en la propia expresión de
-          # `${{ }}` (no con un `if` de shell) para poder interpolarlo
-          # directo en la línea de `railway run --`, igual que
-          # migrate-command en global-migrate.yml -- necesario cuando el
-          # repo que llama envuelve el comando en `sh -c '...'` (por
-          # ejemplo, para overridear DB_HOST/DB_PORT antes de revertir).
-          #
-          # db-migrator-username/password: mismo motivo que en
-          # global-migrate.yml -- el contexto `secrets` no es accesible
-          # dentro de `with:` del repo que llama, así que se splicean acá.
-          if [ -n "${{ secrets.db-migrator-username }}" ]; then
+          if [ -n "$MIGRATOR_USERNAME" ]; then
             railway run \
               --service "${{ inputs.railway-service }}" \
-              -- env DB_USERNAME="${{ secrets.db-migrator-username }}" DB_PASSWORD="${{ secrets.db-migrator-password }}" ${{ inputs.rollback-command != '' && inputs.rollback-command || format('php artisan migrate:rollback --step={0} --force', inputs.steps) }}
+              -- env DB_USERNAME="$MIGRATOR_USERNAME" DB_PASSWORD="$MIGRATOR_PASSWORD" sh -c "$ROLLBACK_COMMAND"
           else
             railway run \
               --service "${{ inputs.railway-service }}" \
-              -- ${{ inputs.rollback-command != '' && inputs.rollback-command || format('php artisan migrate:rollback --step={0} --force', inputs.steps) }}
+              -- sh -c "$ROLLBACK_COMMAND"
           fi
 
