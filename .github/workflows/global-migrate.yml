@@ -37,6 +37,11 @@ name: Global · Run Migrations
 #         setup-command: composer install --prefer-dist --no-progress --no-interaction
 #       secrets:
 #         railway-token: ${{ secrets.RAILWAY_TOKEN_DEVELOPMENT }}
+#         # Opcionales -- un usuario de DB dedicado a migración, scoped
+#         # solo al esquema de la app, en vez de las credenciales completas
+#         # que Railway inyecta por defecto. Se omiten si no aplica.
+#         db-migrator-username: ${{ secrets.DB_MIGRATOR_USERNAME_DEVELOPMENT }}
+#         db-migrator-password: ${{ secrets.DB_MIGRATOR_PASSWORD_DEVELOPMENT }}
 
 on:
   workflow_call:
@@ -69,6 +74,12 @@ on:
       railway-token:
         description: "Project Token de Railway para el ambiente indicado"
         required: true
+      db-migrator-username:
+        description: "Usuario de base de datos a inyectar como DB_USERNAME antes de migrate-command (opcional -- un usuario dedicado a migración, scoped solo al esquema de la app, en vez de heredar las credenciales completas que Railway inyecta por defecto). Vacío = no sobreescribir."
+        required: false
+      db-migrator-password:
+        description: "Contraseña del usuario anterior, inyectada como DB_PASSWORD"
+        required: false
 
 jobs:
   migrate:
@@ -101,6 +112,20 @@ jobs:
           # el scope del token antes que arriesgar un flag sin confirmar
           # contra un ambiente real. --service sí es necesario si el
           # proyecto de Railway tiene más de un servicio.
-          railway run \
-            --service "${{ inputs.railway-service }}" \
-            -- ${{ inputs.migrate-command }}
+          #
+          # db-migrator-username/password NO pueden ir embebidos en
+          # migrate-command por el repo que llama: el contexto `secrets` no
+          # es accesible dentro de `with:` (solo dentro de `secrets:`, que
+          # es donde este repo los recibe). Por eso se splicean acá, en
+          # texto plano dentro del script -- igual que DB_HOST/DB_PORT hoy,
+          # `env VAR=valor cmd` exporta la variable al proceso hijo (`sh -c
+          # '...'` de migrate-command y, con él, a `php artisan` adentro).
+          if [ -n "${{ secrets.db-migrator-username }}" ]; then
+            railway run \
+              --service "${{ inputs.railway-service }}" \
+              -- env DB_USERNAME="${{ secrets.db-migrator-username }}" DB_PASSWORD="${{ secrets.db-migrator-password }}" ${{ inputs.migrate-command }}
+          else
+            railway run \
+              --service "${{ inputs.railway-service }}" \
+              -- ${{ inputs.migrate-command }}
+          fi

@@ -53,6 +53,10 @@ name: Global · Rollback Migrations
 #         setup-command: composer install --prefer-dist --no-progress --no-interaction --no-scripts
 #       secrets:
 #         railway-token: ${{ inputs.environment == 'production' && secrets.RAILWAY_TOKEN_PRODUCTION || secrets.RAILWAY_TOKEN_DEVELOPMENT }}
+#         # Opcionales -- mismo usuario dedicado a migración que
+#         # global-migrate.yml. Se omiten si no aplica.
+#         db-migrator-username: ${{ inputs.environment == 'production' && secrets.DB_MIGRATOR_USERNAME_PRODUCTION || secrets.DB_MIGRATOR_USERNAME_DEVELOPMENT }}
+#         db-migrator-password: ${{ inputs.environment == 'production' && secrets.DB_MIGRATOR_PASSWORD_PRODUCTION || secrets.DB_MIGRATOR_PASSWORD_DEVELOPMENT }}
 
 on:
   workflow_call:
@@ -90,6 +94,12 @@ on:
       railway-token:
         description: "Project Token de Railway para el ambiente indicado"
         required: true
+      db-migrator-username:
+        description: "Usuario de base de datos a inyectar como DB_USERNAME antes de rollback-command (opcional -- un usuario dedicado a migración, scoped solo al esquema de la app, en vez de heredar las credenciales completas que Railway inyecta por defecto). Vacío = no sobreescribir."
+        required: false
+      db-migrator-password:
+        description: "Contraseña del usuario anterior, inyectada como DB_PASSWORD"
+        required: false
 
 jobs:
   rollback:
@@ -125,7 +135,17 @@ jobs:
           # migrate-command en global-migrate.yml -- necesario cuando el
           # repo que llama envuelve el comando en `sh -c '...'` (por
           # ejemplo, para overridear DB_HOST/DB_PORT antes de revertir).
-          railway run \
-            --service "${{ inputs.railway-service }}" \
-            -- ${{ inputs.rollback-command != '' && inputs.rollback-command || format('php artisan migrate:rollback --step={0} --force', inputs.steps) }}
+          #
+          # db-migrator-username/password: mismo motivo que en
+          # global-migrate.yml -- el contexto `secrets` no es accesible
+          # dentro de `with:` del repo que llama, así que se splicean acá.
+          if [ -n "${{ secrets.db-migrator-username }}" ]; then
+            railway run \
+              --service "${{ inputs.railway-service }}" \
+              -- env DB_USERNAME="${{ secrets.db-migrator-username }}" DB_PASSWORD="${{ secrets.db-migrator-password }}" ${{ inputs.rollback-command != '' && inputs.rollback-command || format('php artisan migrate:rollback --step={0} --force', inputs.steps) }}
+          else
+            railway run \
+              --service "${{ inputs.railway-service }}" \
+              -- ${{ inputs.rollback-command != '' && inputs.rollback-command || format('php artisan migrate:rollback --step={0} --force', inputs.steps) }}
+          fi
 
