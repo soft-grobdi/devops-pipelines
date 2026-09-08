@@ -13,10 +13,17 @@ name: Global · Container Smoke Test
 #
 #   jobs:
 #     smoketest:
+#       needs: build   # el job que ya construyó y publicó la imagen en GHCR
 #       uses: soft-grobdi/devops-pipelines/.github/workflows/global-container-smoketest.yml@v1
 #       with:
 #         health-path: /up
 #         port: 8080
+#         # Opcionales -- si se pasan, el stack usa la imagen que `build` ya
+#         # construyó y publicó en vez de reconstruir desde cero (ver más
+#         # abajo). local-image-tag debe coincidir con el `image:` que el
+#         # docker-compose.yml del repo declara en el servicio de la app.
+#         image-ref: ${{ needs.build.outputs.image-ref }}
+#         local-image-tag: pedidos-grobdi:ci-local
 #         # Si el docker-compose.yml del repo depende de un archivo que no
 #         # está versionado (ej. un env_file con config local), setup-command
 #         # es el lugar para generarlo antes de levantar el stack:
@@ -24,6 +31,9 @@ name: Global · Container Smoke Test
 #           cat > .env.docker <<'ENVEOF'
 #           APP_KEY=base64:...
 #           ENVEOF
+#       permissions:
+#         contents: read
+#         packages: read
 
 on:
   workflow_call:
@@ -53,9 +63,20 @@ on:
         required: false
         type: string
         default: ""
+      image-ref:
+        description: "Referencia completa de una imagen ya construida (ej. la salida de global-docker-build). Si se da, el stack la usa en vez de reconstruir con `docker compose up --build`. Vacío = comportamiento de siempre (construye desde el Dockerfile)."
+        required: false
+        type: string
+        default: ""
+      local-image-tag:
+        description: "Tag local al que se retagea image-ref antes de `docker compose up` -- debe coincidir exactamente con el `image:` del servicio de la app en compose-file, o Compose no la reconoce y reconstruye igual. Requerido si image-ref no está vacío."
+        required: false
+        type: string
+        default: ""
 
 permissions:
   contents: read
+  packages: read
 
 jobs:
   smoketest:
@@ -78,8 +99,32 @@ jobs:
           SETUP_COMMAND: ${{ inputs.setup-command }}
         run: eval "$SETUP_COMMAND"
 
+      - name: Reusar la imagen ya construida (si se dio image-ref)
+        if: inputs.image-ref != ''
+        # Evita un tercer build de la misma imagen: el job `build` (que este
+        # workflow normalmente corre después de) ya la construyó y publicó
+        # en GHCR hace segundos. `docker compose up` sin `--build` no
+        # reconstruye si el `image:` del servicio ya existe localmente --
+        # por eso el pull+tag ANTES de levantar el stack, no después.
+        env:
+          IMAGE_REF: ${{ inputs.image-ref }}
+          LOCAL_IMAGE_TAG: ${{ inputs.local-image-tag }}
+        run: |
+          echo "${{ github.token }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+          docker pull "$IMAGE_REF"
+          docker tag "$IMAGE_REF" "$LOCAL_IMAGE_TAG"
+
       - name: Levantar stack
-        run: docker compose -f "${{ inputs.compose-file }}" up -d --build
+        # Sin --build cuando ya se retageó image-ref arriba: Compose no
+        # reconstruye una imagen que ya existe localmente bajo el nombre
+        # declarado en `image:`. Con --build cuando no se pasó image-ref,
+        # para no romper a un consumidor que todavía no lo use.
+        run: |
+          if [ -n "${{ inputs.image-ref }}" ]; then
+            docker compose -f "${{ inputs.compose-file }}" up -d
+          else
+            docker compose -f "${{ inputs.compose-file }}" up -d --build
+          fi
 
       - name: Esperar respuesta saludable
         run: |
