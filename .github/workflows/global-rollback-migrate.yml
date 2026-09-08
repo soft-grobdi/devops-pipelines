@@ -16,6 +16,20 @@ name: Global · Rollback Migrations
 # caso en que la migración corrió hace segundos y se confirma que ningún
 # dato real la usó todavía.
 #
+# El token de Railway se recibe como secret explícito (`railway-token`), NO
+# por `secrets: inherit`: mismo motivo que en global-migrate.yml -- los
+# secrets scoped a un Environment no se propagan por inherit a un job de
+# otro repo que solo declara el environment como input de texto. Se
+# recomienda un secret de repo por ambiente (ej. RAILWAY_TOKEN_DEVELOPMENT,
+# RAILWAY_TOKEN_PRODUCTION) que el repo que llama selecciona según el
+# ambiente elegido en el `workflow_dispatch`.
+#
+# `railway run` NO ejecuta el comando dentro del contenedor ya desplegado:
+# lo corre en ESTE runner, igual que en global-migrate.yml -- por eso este
+# job también hace checkout y, si hace falta, instala el toolchain
+# (php-version) y las dependencias (setup-command) antes de correr
+# rollback-command.
+#
 # Uso desde otro repo:
 #
 #   # .github/workflows/rollback-migrate.yml del repo que llama
@@ -35,7 +49,10 @@ name: Global · Rollback Migrations
 #         railway-service: pedidos-grobdi
 #         environment: ${{ inputs.environment }}
 #         steps: ${{ inputs.steps }}
-#       secrets: inherit
+#         php-version: "8.2"
+#         setup-command: composer install --prefer-dist --no-progress --no-interaction --no-scripts
+#       secrets:
+#         railway-token: ${{ inputs.environment == 'production' && secrets.RAILWAY_TOKEN_PRODUCTION || secrets.RAILWAY_TOKEN_DEVELOPMENT }}
 
 on:
   workflow_call:
@@ -58,29 +75,57 @@ on:
         required: false
         type: string
         default: ""
+      php-version:
+        description: "Versión de PHP a instalar en el runner antes de revertir (vacío = no instalar PHP, ej. para un stack Node)"
+        required: false
+        type: string
+        default: ""
+      setup-command:
+        description: "Comando para instalar dependencias antes de revertir (ej. composer install, npm ci)"
+        required: false
+        type: string
+        default: ""
+
+    secrets:
+      railway-token:
+        description: "Project Token de Railway para el ambiente indicado"
+        required: true
 
 jobs:
   rollback:
     runs-on: ubuntu-latest
     environment: ${{ inputs.environment }}
     steps:
+      - uses: actions/checkout@v4
+
+      - if: inputs.php-version != ''
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: ${{ inputs.php-version }}
+          coverage: none
+
+      - if: inputs.setup-command != ''
+        name: Instalar dependencias
+        run: ${{ inputs.setup-command }}
+
       - name: Instalar Railway CLI
         run: npm install -g @railway/cli
 
       - name: Revertir migraciones
         env:
-          RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+          RAILWAY_TOKEN: ${{ secrets.railway-token }}
         run: |
-          CMD="${{ inputs.rollback-command }}"
-          if [ -z "$CMD" ]; then
-            CMD="php artisan migrate:rollback --step=${{ inputs.steps }} --force"
-          fi
-          echo "Comando: $CMD"
           # No se pasa --environment: mismo motivo que en global-migrate.yml
-          # -- el Project Token ya viene scoped a un ambiente.
-          # El comando intencionalmente se divide en argumentos
-          # shellcheck disable=SC2086
+          # -- el Project Token ya viene scoped a un ambiente. --service sí
+          # es necesario si el proyecto de Railway tiene más de un servicio.
+          #
+          # El comando por defecto se resuelve en la propia expresión de
+          # `${{ }}` (no con un `if` de shell) para poder interpolarlo
+          # directo en la línea de `railway run --`, igual que
+          # migrate-command en global-migrate.yml -- necesario cuando el
+          # repo que llama envuelve el comando en `sh -c '...'` (por
+          # ejemplo, para overridear DB_HOST/DB_PORT antes de revertir).
           railway run \
             --service "${{ inputs.railway-service }}" \
-            -- $CMD
+            -- ${{ inputs.rollback-command != '' && inputs.rollback-command || format('php artisan migrate:rollback --step={0} --force', inputs.steps) }}
 
