@@ -56,11 +56,33 @@ jobs:
         run: |
           # No se pasa --environment: mismo motivo que en global-migrate.yml
           # -- el Project Token ya viene scoped a un ambiente. `railway up`
-          # construye y despliega desde este checkout. Si más adelante
-          # conviene desplegar exactamente la imagen que ya construyó y
-          # escaneó global-docker-build.yml/global-security-scan.yml en vez
-          # de reconstruir aquí, revisar el mecanismo de Railway para
-          # desplegar desde una imagen de registro en vez de build-from-source.
+          # construye y despliega desde este checkout, en vez de reusar la
+          # imagen que global-docker-build.yml/global-security-scan.yml ya
+          # construyeron y escanearon -- por eso lo desplegado no es
+          # literalmente lo escaneado, y por eso cada cambio se construye una
+          # vez más de lo necesario.
+          #
+          # Investigado y descartado por ahora (2026-09-09): Railway soporta
+          # un origen de servicio "Docker Image" que apunta a
+          # ghcr.io/<owner>/<repo>:<tag> y se salta el build por completo,
+          # reemplazando el builder DOCKERFILE de railway.json. Trae tres
+          # costos que no se justifican todavía:
+          #   1. Un registro PRIVADO (este lo es) requiere plan Pro de
+          #      Railway -- a confirmar si el proyecto lo tiene.
+          #   2. El cambio de origen se hace a mano en el dashboard, por
+          #      servicio y por AMBIENTE (development y production por
+          #      separado) -- no es algo que este workflow pueda aplicar la
+          #      primera vez, y agrega credenciales GHCR (PAT read:packages)
+          #      como config nueva a mantener dentro de Railway.
+          #   3. `railway redeploy` (el comando para esta ruta) no bloquea
+          #      hasta el estado terminal como `railway up` sin --detach --
+          #      dispara y retorna. Recuperar el job verde/rojo real que ya
+          #      tenemos hoy exigiría hacer polling manual contra la API
+          #      GraphQL de Railway (`deployments { status }`), workflow más
+          #      complejo por un beneficio que hoy es sobre todo velocidad.
+          # Si el costo del build repetido se vuelve el cuello de botella
+          # real (medido, no supuesto), retomar esto empezando por confirmar
+          # el plan de Railway.
           #
           # -m/--message: railway up (CLI) no manda metadata de git como sí
           # hace la integración nativa Railway<->GitHub -- sin esto, todo

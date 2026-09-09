@@ -52,17 +52,34 @@ llama, porque de ahí sale tanto la protección como el secreto.
 # .github/workflows/ci.yml
 name: CI
 
+# Solo pull_request, no push: cd.yml ya reacciona al push que genera el
+# merge a develop/master -- correr toda la suite otra vez ahí es una segunda
+# corrida redundante de lo mismo. branches acota a PRs que van CONTRA
+# develop/master (rama destino), para no correr el pipeline completo en un
+# PR entre dos ramas de feature que no va camino a producción.
 on:
   pull_request:
-  push:
     branches: [develop, master]
+
+# Un push nuevo al mismo PR cancela el run anterior -- son solo checks, no
+# algo que migre o despliegue nada real.
+concurrency:
+  group: ci-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
 
 jobs:
   laravel-checks:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
-      - uses: shivammathur/setup-php@v2
+      # Fijar por SHA, no por tag flotante v2 -- mismo criterio que Trivy
+      # en global-security-scan.yml. Ver la Fase de hardening de tu propio
+      # pipeline para el porqué.
+      - uses: shivammathur/setup-php@f3e473d116dcccaddc5834248c87452386958240 # 2.37.2
         with:
           php-version: "8.2"
       - run: composer install --prefer-dist --no-progress
@@ -72,6 +89,7 @@ jobs:
 
   migrations-check:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     services:
       mariadb:
         image: mariadb:10.11
@@ -84,14 +102,17 @@ jobs:
           --health-interval=10s --health-timeout=5s --health-retries=10
     steps:
       - uses: actions/checkout@v4
-      - uses: shivammathur/setup-php@v2
+      - uses: shivammathur/setup-php@f3e473d116dcccaddc5834248c87452386958240 # 2.37.2
         with:
           php-version: "8.2"
       - run: composer install --prefer-dist --no-progress
       - run: php artisan migrate --force
+      # La forma barata de detectar en el PR una migración que rompería un
+      # rollback de código más adelante.
       - run: php artisan migrate:rollback --force
 
   build:
+    needs: [laravel-checks, migrations-check]
     uses: soft-grobdi/devops-pipelines/.github/workflows/global-docker-build.yml@v1
     with:
       image-name: pedidos-grobdi
@@ -111,10 +132,26 @@ jobs:
   smoketest:
     needs: build
     uses: soft-grobdi/devops-pipelines/.github/workflows/global-container-smoketest.yml@v1
+    permissions:
+      contents: read
+      packages: read
     with:
       health-path: /up
       port: 8080
+      # Reusa la imagen que `build` ya publicó en GHCR en vez de que
+      # `docker compose up` la reconstruya entera de nuevo -- evita un
+      # tercer build de lo mismo (el segundo es el de este job). Debe
+      # coincidir con el `image:` del servicio de la app en docker-compose.yml.
+      image-ref: ${{ needs.build.outputs.image-ref }}
+      local-image-tag: pedidos-grobdi:ci-local
 ```
+
+`secrets: inherit` **no funciona** con estos workflows: declaran
+`secrets: railway-token` (y opcionalmente `db-migrator-username`/
+`db-migrator-password`) explícitos en su `workflow_call`, así que hay que
+pasarlos por nombre, seleccionando el secreto que corresponde al ambiente
+resuelto. Es intencional — ver la nota sobre tokens explícitos en la sección
+de ambientes, arriba.
 
 ```yaml
 # .github/workflows/cd.yml
@@ -131,20 +168,37 @@ name: CD
 on:
   push:
     branches: [develop, master]
+  workflow_dispatch: {}
+
+# Nunca cancelar un migrate o un deploy a medias.
+concurrency:
+  group: cd-${{ github.ref_name }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
 
 jobs:
   resolve-environment:
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     outputs:
       environment: ${{ steps.map.outputs.environment }}
     steps:
       - id: map
+        # `case` en vez de if/else: falla cerrado. Con workflow_dispatch
+        # habilitado arriba, un if/else que cae a "development" por defecto
+        # despliega a development CUALQUIER rama que se le dispare a mano,
+        # en silencio.
         run: |
-          if [ "${{ github.ref_name }}" = "master" ]; then
-            echo "environment=production" >> "$GITHUB_OUTPUT"
-          else
-            echo "environment=development" >> "$GITHUB_OUTPUT"
-          fi
+          case "${{ github.ref_name }}" in
+            master) echo "environment=production" >> "$GITHUB_OUTPUT" ;;
+            develop) echo "environment=development" >> "$GITHUB_OUTPUT" ;;
+            *)
+              echo "::error::La rama '${{ github.ref_name }}' no tiene un ambiente de despliegue asignado. Abortando."
+              exit 1
+              ;;
+          esac
 
   migrate:
     needs: resolve-environment
@@ -152,7 +206,14 @@ jobs:
     with:
       railway-service: pedidos-grobdi
       environment: ${{ needs.resolve-environment.outputs.environment }}
-    secrets: inherit
+      migrate-command: "php artisan migrate --force"
+    secrets:
+      railway-token: ${{ needs.resolve-environment.outputs.environment == 'production' && secrets.RAILWAY_TOKEN_PRODUCTION || secrets.RAILWAY_TOKEN_DEVELOPMENT }}
+      # Opcional: usuario de base con privilegios acotados al esquema de la
+      # app (sin GRANT OPTION ni privilegios globales), en vez de que
+      # `railway run` herede las credenciales completas de la app.
+      db-migrator-username: ${{ needs.resolve-environment.outputs.environment == 'production' && secrets.DB_MIGRATOR_USERNAME_PRODUCTION || secrets.DB_MIGRATOR_USERNAME_DEVELOPMENT }}
+      db-migrator-password: ${{ needs.resolve-environment.outputs.environment == 'production' && secrets.DB_MIGRATOR_PASSWORD_PRODUCTION || secrets.DB_MIGRATOR_PASSWORD_DEVELOPMENT }}
 
   deploy:
     needs: [resolve-environment, migrate]
@@ -160,7 +221,8 @@ jobs:
     with:
       railway-service: pedidos-grobdi
       environment: ${{ needs.resolve-environment.outputs.environment }}
-    secrets: inherit
+    secrets:
+      railway-token: ${{ needs.resolve-environment.outputs.environment == 'production' && secrets.RAILWAY_TOKEN_PRODUCTION || secrets.RAILWAY_TOKEN_DEVELOPMENT }}
 ```
 
 Si `development` y `production` alguna vez necesitan pasos distintos (no solo
@@ -181,6 +243,12 @@ on:
         type: number
         default: 1
 
+# Dos rollbacks del mismo ambiente en paralelo es riesgo de corrupción de
+# esquema -- nunca cancelar uno a medias tampoco.
+concurrency:
+  group: rollback-${{ inputs.environment }}
+  cancel-in-progress: false
+
 jobs:
   rollback:
     uses: soft-grobdi/devops-pipelines/.github/workflows/global-rollback-migrate.yml@v1
@@ -188,8 +256,17 @@ jobs:
       railway-service: pedidos-grobdi
       environment: ${{ inputs.environment }}
       steps: ${{ inputs.steps }}
-    secrets: inherit
+      rollback-command: "php artisan migrate:rollback --force --step=${{ inputs.steps }}"
+    secrets:
+      railway-token: ${{ inputs.environment == 'production' && secrets.RAILWAY_TOKEN_PRODUCTION || secrets.RAILWAY_TOKEN_DEVELOPMENT }}
+      db-migrator-username: ${{ inputs.environment == 'production' && secrets.DB_MIGRATOR_USERNAME_PRODUCTION || secrets.DB_MIGRATOR_USERNAME_DEVELOPMENT }}
+      db-migrator-password: ${{ inputs.environment == 'production' && secrets.DB_MIGRATOR_PASSWORD_PRODUCTION || secrets.DB_MIGRATOR_PASSWORD_DEVELOPMENT }}
 ```
+
+> `workflow_dispatch` solo puede dispararse sobre un workflow que exista en
+> la rama por defecto del repo (`master` aquí) — es una restricción dura de
+> GitHub, no de este pipeline. Un `rollback-migrate.yml` que solo existe en
+> una rama de feature nunca aparece como opción para correr a mano.
 
 ## Pendiente de verificar al dar de alta el primer repo consumidor
 
@@ -199,9 +276,30 @@ jobs:
 - Que la protección "Prevent self-review" de GitHub Environments esté
   disponible en el plan de la organización; si no, ver la alternativa en la
   sección de ambientes de arriba.
-- Si conviene que `global-deploy-railway.yml` despliegue la imagen exacta
-  que ya construyó y escaneó `global-docker-build.yml`/`global-security-scan.yml`,
-  en vez de que `railway up` reconstruya desde el checkout.
+
+**Investigado y descartado por ahora**: que `global-deploy-railway.yml`
+despliegue la imagen exacta que ya construyó y escaneó
+`global-docker-build.yml`/`global-security-scan.yml`, en vez de que
+`railway up` reconstruya desde el checkout. Railway sí soporta un origen de
+servicio "Docker Image" que apunta a un registro y se salta el build, pero
+trae tres costos: un registro privado exige plan Pro de Railway, el cambio
+de origen se configura a mano en el dashboard por servicio y por ambiente
+(no algo que un workflow pueda aplicar), y el comando de despliegue asociado
+(`railway redeploy`) no bloquea hasta el estado terminal como `railway up`
+sin `--detach` — recuperar un job verde/rojo real exigiría hacer polling
+manual contra la API GraphQL de Railway. Queda documentado inline en
+`global-deploy-railway.yml`; retomar solo si el build repetido se vuelve un
+cuello de botella medido, no supuesto.
+
+## Retención de imágenes en GHCR
+
+`global-docker-build.yml` publica una imagen por cada build (etiquetada con
+el SHA del commit) y no borra nada — el registro crece sin límite con cada
+PR. Sin una política de retención configurada en el repo consumidor
+(**Settings → Packages**, o una Action tipo
+[`actions/delete-package-versions`](https://github.com/actions/delete-package-versions)
+corriendo con cron), esto es trabajo manual pendiente para quien dé de alta
+el primer repo consumidor en serio.
 
 ## Versionado
 
