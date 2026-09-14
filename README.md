@@ -1,9 +1,13 @@
 # devops-pipelines
 
 Workflows reutilizables de GitHub Actions para los repos de `soft-grobdi`.
-No asumen ningún lenguaje o framework — el repo que llama aporta el
-Dockerfile, el `docker-compose.yml` y los pasos de lint/tests propios de su
-stack; estos workflows aportan build, escaneo, migración y despliegue.
+Dos categorías: los **genéricos** (build, escaneo, smoketest, migración,
+despliegue) no asumen ningún lenguaje — el repo que llama aporta el
+Dockerfile, el `docker-compose.yml` y el comando de migración propio de su
+stack. Los **por stack** (`global-nx-checks.yml` hoy; un
+`global-laravel-checks.yml` el día que `pedidos-grobdi` quiera lo mismo)
+sí asumen un lenguaje/framework porque lint, typecheck y tests no tienen
+una forma agnóstica razonable.
 
 Convención: todo archivo reutilizable lleva el prefijo `global-`.
 
@@ -17,6 +21,7 @@ Convención: todo archivo reutilizable lleva el prefijo `global-`.
 | [`global-migrate.yml`](.github/workflows/global-migrate.yml) | Corre el comando de migración contra la base real de un ambiente, sin desplegar código | `railway-service`, `environment`, `migrate-command` |
 | [`global-deploy-railway.yml`](.github/workflows/global-deploy-railway.yml) | Despliega con la Railway CLI al ambiente indicado | `railway-service`, `environment` |
 | [`global-rollback-migrate.yml`](.github/workflows/global-rollback-migrate.yml) | Revierte N lotes de migración. Solo se dispara a mano (`workflow_dispatch`) desde el repo que llama, nunca automáticamente | `railway-service`, `environment`, `steps`, `rollback-command` |
+| [`global-nx-checks.yml`](.github/workflows/global-nx-checks.yml) | Typecheck + `nx run-many` (lint/build/test) + `nestjs-doctor` opcional, para un proyecto Nx/TypeScript | `node-version`, `nx-projects`, `nx-targets`, `typecheck-configs`, `nestjs-doctor-path` |
 
 Cada archivo trae en su cabecera un ejemplo mínimo de cómo invocarlo.
 
@@ -267,6 +272,82 @@ jobs:
 > la rama por defecto del repo (`master` aquí) — es una restricción dura de
 > GitHub, no de este pipeline. Un `rollback-migrate.yml` que solo existe en
 > una rama de feature nunca aparece como opción para correr a mano.
+
+## Ejemplo de consumo (monorepo Nx/TypeScript + Railway)
+
+A diferencia de Laravel, un monorepo Nx normalmente tiene más de una app,
+cada una con su propio ambiente/base de datos. La convención es **un
+`ci-<app>.yml` y un `cd-<app>.yml` por app**, no uno solo para todo el
+repo — así un PR que toca una sola app no dispara build/deploy de las
+demás. Cada archivo por app es corto porque delega en los reutilizables;
+la app nueva copia el patrón, nunca la lógica de `global-nx-checks.yml`.
+
+```yaml
+# .github/workflows/ci-<app>.yml
+name: CI · <app>
+
+on:
+  pull_request:
+    branches: [develop, master]
+    paths:
+      - 'apps/<app>/**'
+      - 'packages/**'
+      - 'pnpm-lock.yaml'
+      - 'pnpm-workspace.yaml'
+      - 'package.json'
+      - '.github/workflows/ci-<app>.yml'
+
+concurrency:
+  group: ci-<app>-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  checks:
+    uses: soft-grobdi/devops-pipelines/.github/workflows/global-nx-checks.yml@v1
+    with:
+      node-version: '24'
+      nx-projects: <app> database config
+      typecheck-configs: |
+        apps/<app>/tsconfig.app.json
+      # Vacío en una app de front -- ver la nota sobre por qué
+      # nestjs-doctor-path es opcional, arriba en la tabla de workflows.
+      nestjs-doctor-path: apps/<app>
+    permissions:
+      contents: read
+
+  build:
+    needs: checks
+    uses: soft-grobdi/devops-pipelines/.github/workflows/global-docker-build.yml@v1
+    with:
+      image-name: <app>
+      dockerfile-path: apps/<app>/Dockerfile
+      context: .
+    permissions:
+      contents: read
+      packages: write
+
+  smoketest:
+    needs: build
+    uses: soft-grobdi/devops-pipelines/.github/workflows/global-container-smoketest.yml@v1
+    permissions:
+      contents: read
+      packages: read
+    with:
+      compose-file: apps/<app>/docker-compose.ci.yml
+      health-path: /api/health
+      port: 3000
+      image-ref: ${{ needs.build.outputs.image-ref }}
+      local-image-tag: <app>:ci-local
+```
+
+`cd-<app>.yml` sigue el mismo patrón de `resolve-environment` → `migrate`
+(`global-migrate.yml` con `node-version` en vez de `php-version`, y el
+secret `migrate-env` con `DATABASE_URL` en vez de `db-migrator-username`/
+`password`) → `deploy` (`global-deploy-railway.yml`, sin cambios) que ya
+usa `pedidos-grobdi/cd.yml`.
 
 ## Pendiente de verificar al dar de alta el primer repo consumidor
 
