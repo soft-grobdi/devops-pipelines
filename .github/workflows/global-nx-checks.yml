@@ -1,0 +1,104 @@
+name: Global · Nx Checks
+
+# Los checks de un proyecto Nx (typecheck, lint, build, test, y
+# opcionalmente nestjs-doctor) para un stack Node/TypeScript. No asume
+# Nest ni ningún framework en particular -- nx-targets/nx-projects los
+# define el repo que llama; nestjs-doctor-path es opcional a propósito,
+# porque un monorepo puede tener apps de front que no lo necesitan.
+#
+# Uso desde otro repo:
+#
+#   jobs:
+#     checks:
+#       uses: soft-grobdi/devops-pipelines/.github/workflows/global-nx-checks.yml@v1
+#       with:
+#         node-version: '24'
+#         nx-projects: ms-cross-storage database config
+#         typecheck-configs: |
+#           apps/ms-cross-storage/tsconfig.app.json
+#         nestjs-doctor-path: apps/ms-cross-storage
+#       permissions:
+#         contents: read
+
+on:
+  workflow_call:
+    inputs:
+      node-version:
+        description: "Versión de Node a instalar en el runner"
+        required: true
+        type: string
+      nx-projects:
+        description: "Proyectos Nx a correr, separados por espacio (-p de nx run-many)"
+        required: true
+        type: string
+      nx-targets:
+        description: "Targets de nx run-many, separados por coma"
+        required: false
+        type: string
+        default: "lint,build,test"
+      typecheck-configs:
+        description: "Rutas a tsconfig, una por línea. Cada una corre `tsc --noEmit` por separado. Vacío = ninguna"
+        required: false
+        type: string
+        default: ""
+      nestjs-doctor-path:
+        description: "Ruta al proyecto NestJS a auditar con nestjs-doctor. Vacío = no correrlo"
+        required: false
+        type: string
+        default: ""
+
+permissions:
+  contents: read
+
+jobs:
+  checks:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      # En un runner efímero el daemon de Nx no aporta nada -- solo deja un
+      # proceso colgado si el job termina antes de que se apague solo.
+      NX_DAEMON: 'false'
+    steps:
+      - uses: actions/checkout@v4
+
+      # v7.0.0 -- misma confirmada contra la API de GitHub que usa
+      # global-migrate.yml.
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: ${{ inputs.node-version }}
+
+      - run: corepack enable
+      - run: pnpm install --frozen-lockfile
+
+      - name: Typecheck
+        if: inputs.typecheck-configs != ''
+        # Por `env:`, nunca interpolado en `run:` -- mismo criterio que
+        # migrate-env en global-migrate.yml.
+        env:
+          TSCONFIGS: ${{ inputs.typecheck-configs }}
+        run: |
+          while IFS= read -r config; do
+            [ -z "$config" ] && continue
+            echo "::group::tsc -p $config"
+            npx tsc -p "$config" --noEmit
+            echo "::endgroup::"
+          done <<< "$TSCONFIGS"
+
+      - name: nx run-many
+        env:
+          NX_TARGETS: ${{ inputs.nx-targets }}
+          NX_PROJECTS: ${{ inputs.nx-projects }}
+        run: pnpm nx run-many -t "$NX_TARGETS" -p $NX_PROJECTS
+
+      - name: nestjs-doctor
+        if: inputs.nestjs-doctor-path != ''
+        # --blocking=warning: cualquier aviso rompe el job, no solo error.
+        # Rutas públicas a propósito se marcan con @Public(), no se baja
+        # el umbral.
+        env:
+          DOCTOR_PATH: ${{ inputs.nestjs-doctor-path }}
+        run: >-
+          npx nestjs-doctor "$DOCTOR_PATH"
+          --blocking=warning
+          --format=github
+          --no-telemetry
