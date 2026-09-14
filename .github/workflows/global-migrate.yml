@@ -1,47 +1,43 @@
 name: Global · Run Migrations
 
-# Corre el comando de migración indicado contra la base real de un ambiente
-# de Railway, SIN desplegar código nuevo. Separado del deploy a propósito:
-# si la migración falla, el deploy nunca llega a intentarse.
+# Corre el comando de migración contra la base real de un ambiente, SIN
+# desplegar código. Separado del deploy a propósito: si la migración
+# falla, el deploy nunca se intenta.
 #
-# El job declara `environment: <inputs.environment>` para heredar las
-# reglas de protección (required reviewers) del GitHub Environment con ese
-# nombre en el repo que llama. El token de Railway se recibe como secret
-# explícito (`railway-token`), NO por `secrets: inherit`: los secrets
-# scoped a un Environment no se propagan por inherit a un job de otro repo
-# que solo declara el environment como input de texto -- hay que pasarlos
-# a mano. Se recomienda un secret de repo por ambiente (ej.
-# RAILWAY_TOKEN_DEVELOPMENT, RAILWAY_TOKEN_PRODUCTION) que el repo que
-# llama selecciona según el ambiente resuelto.
+# `railway run` NO ejecuta dentro del contenedor desplegado: corre el
+# comando en ESTE runner, inyectándole las variables del ambiente. Por eso
+# el job hace checkout, instala el toolchain (php-version / node-version)
+# y las dependencias (setup-command) antes de migrar.
 #
-# migrate-command no asume Laravel — el valor por defecto es artisan, pero
-# un futuro servicio Node puede pasar el suyo (ej. `npx drizzle-kit migrate`).
+# Agnóstico del stack: migrate-command es obligatorio (no hay un default
+# válido para todos), y las variables que la migración necesita
+# sobreescribir se pasan por el secret `migrate-env` como líneas KEY=value.
+# Se aplican DENTRO de `railway run` (vía `env`), así ganan a las que
+# Railway inyecta -- el caso típico es apuntar la base al endpoint público
+# (TCP proxy), porque el runner no alcanza la red privada de Railway.
 #
-# `railway run` NO ejecuta el comando dentro del contenedor ya desplegado:
-# lo corre en ESTE runner, solo inyectándole las variables de entorno del
-# ambiente de Railway. Por eso el job hace checkout del código y, si hace
-# falta, instala el toolchain (php-version) y las dependencias
-# (setup-command) antes de correr migrate-command -- sin esto, `artisan`
-# (o el equivalente del stack que sea) no existe en el runner.
+#   Laravel:  migrate-env: |
+#               DB_HOST=${{ vars.DB_PUBLIC_HOST }}
+#               DB_USERNAME=${{ secrets.DB_MIGRATOR_USERNAME }}
+#               DB_PASSWORD=${{ secrets.DB_MIGRATOR_PASSWORD }}
+#   Drizzle:  migrate-env: |
+#               DATABASE_URL=${{ secrets.DATABASE_URL_PUBLIC }}
 #
-# Uso desde otro repo:
+# Uso:
 #
 #   jobs:
 #     migrate:
-#       needs: [ci]  # o el job que agrupe los checks previos
 #       uses: soft-grobdi/devops-pipelines/.github/workflows/global-migrate.yml@v1
 #       with:
-#         railway-service: pedidos-grobdi
+#         railway-service: ms-cross-storage
 #         environment: development
-#         php-version: "8.2"
-#         setup-command: composer install --prefer-dist --no-progress --no-interaction
+#         node-version: "24"
+#         setup-command: pnpm install --frozen-lockfile
+#         migrate-command: pnpm --filter @org/ms-cross-storage db:migrate
 #       secrets:
 #         railway-token: ${{ secrets.RAILWAY_TOKEN_DEVELOPMENT }}
-#         # Opcionales -- un usuario de DB dedicado a migración, scoped
-#         # solo al esquema de la app, en vez de las credenciales completas
-#         # que Railway inyecta por defecto. Se omiten si no aplica.
-#         db-migrator-username: ${{ secrets.DB_MIGRATOR_USERNAME_DEVELOPMENT }}
-#         db-migrator-password: ${{ secrets.DB_MIGRATOR_PASSWORD_DEVELOPMENT }}
+#         migrate-env: |
+#           DATABASE_URL=${{ secrets.DATABASE_URL_PUBLIC_DEVELOPMENT }}
 
 on:
   workflow_call:
@@ -55,17 +51,21 @@ on:
         required: true
         type: string
       migrate-command:
-        description: "Comando a ejecutar dentro del servicio para aplicar migraciones pendientes"
+        description: "Comando que aplica las migraciones pendientes"
+        required: true
+        type: string
+      php-version:
+        description: "Versión de PHP a instalar en el runner (vacío = no instalar)"
         required: false
         type: string
-        default: "php artisan migrate --force"
-      php-version:
-        description: "Versión de PHP a instalar en el runner antes de migrar (vacío = no instalar PHP, ej. para un stack Node)"
+        default: ""
+      node-version:
+        description: "Versión de Node a instalar en el runner (vacío = no instalar). Habilita corepack; el repo que llama debe declarar `packageManager` en su package.json para fijar la versión de pnpm/yarn"
         required: false
         type: string
         default: ""
       setup-command:
-        description: "Comando para instalar dependencias antes de migrar (ej. composer install, npm ci)"
+        description: "Comando para instalar dependencias antes de migrar (ej. composer install, pnpm install --frozen-lockfile)"
         required: false
         type: string
         default: ""
@@ -74,11 +74,8 @@ on:
       railway-token:
         description: "Project Token de Railway para el ambiente indicado"
         required: true
-      db-migrator-username:
-        description: "Usuario de base de datos a inyectar como DB_USERNAME antes de migrate-command (opcional -- un usuario dedicado a migración, scoped solo al esquema de la app, en vez de heredar las credenciales completas que Railway inyecta por defecto). Vacío = no sobreescribir."
-        required: false
-      db-migrator-password:
-        description: "Contraseña del usuario anterior, inyectada como DB_PASSWORD"
+      migrate-env:
+        description: "Variables a sobreescribir solo durante migrate-command, una por línea (KEY=value). Vacío = ninguna"
         required: false
 
 permissions:
@@ -93,12 +90,21 @@ jobs:
       - uses: actions/checkout@v4
 
       - if: inputs.php-version != ''
-        # Fijado por SHA, no por tag flotante v2 -- misma razón que Trivy
-        # en global-security-scan.yml. 2.37.2 confirmada.
+        # Fijado por SHA, no por tag flotante -- misma razón que Trivy en
+        # global-security-scan.yml. 2.37.2 confirmada.
         uses: shivammathur/setup-php@f3e473d116dcccaddc5834248c87452386958240 # 2.37.2
         with:
           php-version: ${{ inputs.php-version }}
           coverage: none
+
+      - if: inputs.node-version != ''
+        # v7.0.0 confirmada contra la API de GitHub.
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: ${{ inputs.node-version }}
+
+      - if: inputs.node-version != ''
+        run: corepack enable
 
       - if: inputs.setup-command != ''
         name: Instalar dependencias
@@ -110,36 +116,28 @@ jobs:
         run: npm install -g @railway/cli
 
       - name: Ejecutar migraciones
-        # migrate-command y las credenciales del usuario de migración van
-        # por `env:`, no interpoladas directo en `run:` -- ${{ }} se
-        # sustituye como texto plano ANTES de que bash vea el script, así
-        # que un valor con comillas/`;` mal pensadas podría romper la
-        # estructura del script que lo rodea (el `if`, el propio
-        # RAILWAY_TOKEN de arriba), no solo correr como comando. Ningún
-        # consumidor de hoy pasa algo así, pero es una librería reutilizable
-        # -- no debe depender de que seguirá siendo cierto. `sh -c "$VAR"`
-        # (comillas dobles) preserva el valor como una única unidad y deja
-        # que sea sh, no bash, quien reinterprete sus propias comillas
-        # internas (ej. el `sh -c '...'` que ya trae migrate-command).
+        # Todo por `env:`, nada interpolado en `run:` -- ${{ }} se sustituye
+        # como texto ANTES de que bash vea el script; un valor con comillas o
+        # `;` rompería la estructura, no solo el comando.
+        #
+        # Cada línea de migrate-env se vuelve un argumento de `env` por
+        # separado (array de bash), así un valor con espacios, `&` o `?`
+        # (típico en una URL de conexión) llega intacto. Con migrate-env
+        # vacío el array queda vacío y `env` solo ejecuta el comando.
+        #
+        # No se pasa --environment: el Project Token ya viene scoped a un
+        # ambiente. --service sí, porque el proyecto puede tener varios.
         env:
           RAILWAY_TOKEN: ${{ secrets.railway-token }}
           MIGRATE_COMMAND: ${{ inputs.migrate-command }}
-          MIGRATOR_USERNAME: ${{ secrets.db-migrator-username }}
-          MIGRATOR_PASSWORD: ${{ secrets.db-migrator-password }}
+          MIGRATE_ENV: ${{ secrets.migrate-env }}
         run: |
-          # No se pasa --environment: un Project Token de Railway ya viene
-          # scoped a un ambiente específico (por eso hay un RAILWAY_TOKEN
-          # distinto por GitHub Environment). Pasarlo redundante contra un
-          # token ya scoped no está documentado -- se prefiere confiar en
-          # el scope del token antes que arriesgar un flag sin confirmar
-          # contra un ambiente real. --service sí es necesario si el
-          # proyecto de Railway tiene más de un servicio.
-          if [ -n "$MIGRATOR_USERNAME" ]; then
-            railway run \
-              --service "${{ inputs.railway-service }}" \
-              -- env DB_USERNAME="$MIGRATOR_USERNAME" DB_PASSWORD="$MIGRATOR_PASSWORD" sh -c "$MIGRATE_COMMAND"
-          else
-            railway run \
-              --service "${{ inputs.railway-service }}" \
-              -- sh -c "$MIGRATE_COMMAND"
-          fi
+          overrides=()
+          while IFS= read -r line; do
+            [ -z "$line" ] && continue
+            overrides+=("$line")
+          done <<< "$MIGRATE_ENV"
+
+          railway run \
+            --service "${{ inputs.railway-service }}" \
+            -- env "${overrides[@]}" sh -c "$MIGRATE_COMMAND"
