@@ -84,5 +84,10 @@ jobs:
           push: true
           tags: ${{ steps.meta.outputs.image-ref }}
           build-args: ${{ inputs.build-args }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          # Un scope por imagen: sin él todas usan el mismo ("buildkit"), y en
+          # un repo con varias imágenes (ws-operations) cada build pisa la
+          # caché de las otras y casi siempre construye desde cero. En un repo
+          # de una sola imagen solo cambia el nombre: el primer build después
+          # de este cambio no encuentra caché, los siguientes sí.
+          cache-from: type=gha,scope=${{ inputs.image-name }}
+          cache-to: type=gha,mode=max,scope=${{ inputs.image-name }}
