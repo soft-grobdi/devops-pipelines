@@ -67,7 +67,20 @@ jobs:
         with:
           node-version: ${{ inputs.node-version }}
 
-      - run: corepack enable
+      - name: pnpm (versión de packageManager)
+        run: |
+          corepack enable
+          echo "PNPM_STORE=$(pnpm store path --silent)" >> "$GITHUB_ENV"
+
+      # Solo el store (paquetes descargados), no node_modules: install lo arma
+      # igual, pero sin bajar nada si el lockfile no cambió. Ahorra minutos
+      # del plan free de la organización (compartidos entre todos los repos).
+      - uses: actions/cache@v4
+        with:
+          path: ${{ env.PNPM_STORE }}
+          key: pnpm-store-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml') }}
+          restore-keys: pnpm-store-${{ runner.os }}-
+
       - run: pnpm install --frozen-lockfile
 
       - name: Typecheck
